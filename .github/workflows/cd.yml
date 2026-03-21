@@ -1,0 +1,93 @@
+name: CD Dog or Cat Test
+
+on:
+  workflow_run:
+    workflows: ["CI (docker compose)"]
+    types:
+      - completed
+
+env:
+  IMAGE: akp1n/catdog-api:latest
+  PORT: "8000"
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    if: |
+      github.event_name != 'workflow_run' ||
+      github.event.workflow_run.conclusion == 'success'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Pull image
+        run: docker pull $IMAGE
+
+      - name: Run container
+        run: |
+          docker run -d --rm --name catdog -p ${PORT}:8000 $IMAGE
+          docker ps
+
+      - name: Wait for API
+        run: |
+          for i in {1..30}; do
+            if curl -fsS http://localhost:${PORT}/docs >/dev/null; then
+              echo "API is up"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "API did not start"
+          docker logs catdog
+          exit 1
+
+      - name: Functional test (POST /predict) - cat vs dog threshold
+        run: |
+          CAT_FILE="tests/images/cat.411.jpg"
+          DOG_FILE="tests/images/dog.120.jpg"
+
+          echo "=== CAT ==="
+          CAT_STATUS=$(curl -s -o cat_resp.json -w "%{http_code}" \
+            -F "file=@${CAT_FILE}" \
+            http://localhost:${PORT}/predict)
+          echo "HTTP status: $CAT_STATUS"
+          cat cat_resp.json
+          test "$CAT_STATUS" = "200"
+
+          echo "=== DOG ==="
+          DOG_STATUS=$(curl -s -o dog_resp.json -w "%{http_code}" \
+            -F "file=@${DOG_FILE}" \
+            http://localhost:${PORT}/predict)
+          echo "HTTP status: $DOG_STATUS"
+          cat dog_resp.json
+          test "$DOG_STATUS" = "200"
+
+          python - << 'PY'
+          import json
+
+          def load_p(path):
+              data = json.load(open(path, "r", encoding="utf-8"))
+              assert "dogProbability" in data, data
+              p = data["dogProbability"]
+              assert isinstance(p, (int, float)), type(p)
+              assert 0.0 <= p <= 1.0, p
+              return float(p)
+
+          cat_p = load_p("cat_resp.json")
+          dog_p = load_p("dog_resp.json")
+
+          print("cat dogProbability =", cat_p)
+          print("dog dogProbability =", dog_p)
+
+          assert cat_p < 0.5, f"Expected cat_p < 0.5, got {cat_p}"
+          assert dog_p > 0.5, f"Expected dog_p > 0.5, got {dog_p}"
+          print("OK")
+          PY
+
+      - name: Logs (always)
+        if: always()
+        run: docker logs catdog || true
+
+      - name: Stop container
+        if: always()
+        run: docker stop catdog || true
