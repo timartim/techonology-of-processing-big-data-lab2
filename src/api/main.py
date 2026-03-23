@@ -30,6 +30,7 @@ async def lifespan(app: FastAPI):
         ml_service=model_service,
         repository=repository,
         model_version=model_version,
+        prediction_repository=repository
     )
 
     app.state.redis = redis

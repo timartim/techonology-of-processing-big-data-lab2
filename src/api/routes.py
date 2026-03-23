@@ -1,6 +1,7 @@
 from fastapi import APIRouter, File, UploadFile, HTTPException, Request
+from fastapi.params import Query
 
-from src.api.schemas import PredictResponse
+from src.api.schemas import PredictResponse, PredictionRecord
 
 router = APIRouter()
 
@@ -25,3 +26,11 @@ async def predict(request: Request, file: UploadFile = File(...)):
     )
 
     return PredictResponse(**result.model_dump())
+
+@router.get("/predictions", response_model=list[PredictionRecord])
+async def get_last_predictions(
+    request: Request,
+    limit: int = Query(10, ge=1, le=100),
+):
+    service = get_service(request)
+    return await service.get_last_predictions(limit)
