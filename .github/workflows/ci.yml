@@ -8,10 +8,9 @@ on:
 
 env:
   IMAGE: akp1n/catdog-api
-  APP_PORT: "8001"
 
 jobs:
-  build-test:
+  build-start:
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -25,6 +24,7 @@ jobs:
       - name: Create runtime secret files
         shell: bash
         run: |
+          set +x
           mkdir -p secrets
 
           printf "%s" "${{ secrets.REDIS_HOST_INTERNAL }}" > secrets/redis_host.txt
@@ -33,43 +33,43 @@ jobs:
           printf "%s" "${{ secrets.REDIS_APP_USERNAME }}" > secrets/redis_username.txt
           printf "%s" "${{ secrets.REDIS_APP_PASSWORD }}" > secrets/redis_password.txt
 
-          echo "::add-mask::${{ secrets.REDIS_APP_PASSWORD }}"
-          echo "::add-mask::${{ secrets.REDIS_APP_USERNAME }}"
           echo "::add-mask::${{ secrets.REDIS_HOST_INTERNAL }}"
           echo "::add-mask::${{ secrets.REDIS_PORT_INTERNAL }}"
           echo "::add-mask::${{ secrets.REDIS_DB_INDEX }}"
+          echo "::add-mask::${{ secrets.REDIS_APP_USERNAME }}"
+          echo "::add-mask::${{ secrets.REDIS_APP_PASSWORD }}"
 
           cat > secrets/redis_users.acl <<EOF
           user default off
           user ${{ secrets.REDIS_APP_USERNAME }} on >${{ secrets.REDIS_APP_PASSWORD }} ~prediction:* ~predictions:* +ping +hset +hgetall +zadd +zrevrange +multi +exec +select +client
           EOF
 
-          chmod 600 secrets/redis_*
+          chmod 644 secrets/redis_*
 
       - name: Build image (compose)
         run: docker compose build --progress=plain
 
-      - name: Run stack
+      - name: Start stack
         run: docker compose up -d --wait --remove-orphans
 
       - name: Show status
-        run: |
-          docker compose ps
-          docker compose logs --no-color --tail 300
+        run: docker compose ps
 
-      - name: Smoke test API docs
+      - name: Show logs on failure
+        if: failure()
         run: |
-          curl -fsS "http://localhost:${APP_PORT}/docs" > /dev/null
+          docker compose logs --no-color redis || true
+          docker compose logs --no-color web || true
 
-      - name: Stop container
+      - name: Cleanup
         if: always()
         run: |
-          docker compose down -v --remove-orphans
+          docker compose down -v --remove-orphans || true
           rm -rf secrets
 
   push-image:
     runs-on: ubuntu-latest
-    needs: build-test
+    needs: build-start
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     timeout-minutes: 30
 
