@@ -1,36 +1,36 @@
-from fastapi import APIRouter, File, UploadFile, HTTPException
-from .schemas import PredictResponse
-from io import BytesIO
-from PIL import Image
+from fastapi import APIRouter, File, UploadFile, HTTPException, Request
+from fastapi.params import Query
+
+from src.api.schemas import PredictResponse, PredictionRecord
 
 router = APIRouter()
 
-def get_service():
-    from .main import service
-    return service
+
+def get_service(request: Request):
+    return request.app.state.prediction_service
+
 
 @router.post("/predict", response_model=PredictResponse)
-async def predict(file: UploadFile = File(...)):
+async def predict(request: Request, file: UploadFile = File(...)):
     if not file.content_type or not file.content_type.startswith("image/"):
         raise HTTPException(status_code=400, detail="Upload an image file")
 
     data = await file.read()
-    svc = get_service()
+    if not data:
+        raise HTTPException(status_code=400, detail="Uploaded file is empty")
 
+    service = get_service(request)
+    result = await service.predict_and_save(
+        file_bytes=data,
+        file_name=file.filename or "unknown",
+    )
 
-    img = Image.open(BytesIO(data)).convert("RGB")
-    emb = svc.embed_pil(img).reshape(1, -1)
+    return PredictResponse(**result.model_dump())
 
-    clf = svc.classifier
-    if clf is None:
-        raise HTTPException(status_code=500, detail="Classifier is not loaded")
-
-    if not hasattr(clf, "predict_proba"):
-        raise HTTPException(status_code=500, detail="Classifier does not support predict_proba")
-
-    proba = clf.predict_proba(emb)
-
-    dog_class_index = 1
-    dog_prob = float(proba[0, dog_class_index])
-
-    return PredictResponse(dogProbability=dog_prob)
+@router.get("/predictions", response_model=list[PredictionRecord])
+async def get_last_predictions(
+    request: Request,
+    limit: int = Query(10, ge=1, le=100),
+):
+    service = get_service(request)
+    return await service.get_last_predictions(limit)
