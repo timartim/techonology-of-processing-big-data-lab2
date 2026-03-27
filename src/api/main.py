@@ -1,3 +1,4 @@
+import asyncio
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -59,10 +60,12 @@ async def lifespan(app: FastAPI):
 
     app.state.redis = redis
     app.state.prediction_service = prediction_service
+    app.state.predict_lock = asyncio.Lock()
 
-    yield
-
-    await redis.aclose()
+    try:
+        yield
+    finally:
+        await redis.aclose()
 
 
 app = FastAPI(

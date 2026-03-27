@@ -10,6 +10,10 @@ def get_service(request: Request):
     return request.app.state.prediction_service
 
 
+def get_predict_lock(request: Request):
+    return request.app.state.predict_lock
+
+
 @router.post("/predict", response_model=PredictResponse)
 async def predict(request: Request, file: UploadFile = File(...)):
     if not file.content_type or not file.content_type.startswith("image/"):
@@ -19,13 +23,23 @@ async def predict(request: Request, file: UploadFile = File(...)):
     if not data:
         raise HTTPException(status_code=400, detail="Uploaded file is empty")
 
+    lock = get_predict_lock(request)
+    if lock.locked():
+        raise HTTPException(
+            status_code=409,
+            detail="Prediction is already in progress. Please try again later.",
+        )
+
     service = get_service(request)
-    result = await service.predict_and_save(
-        file_bytes=data,
-        file_name=file.filename or "unknown",
-    )
+
+    async with lock:
+        result = await service.predict_and_save(
+            file_bytes=data,
+            file_name=file.filename or "unknown",
+        )
 
     return PredictResponse(**result.model_dump())
+
 
 @router.get("/predictions", response_model=list[PredictionRecord])
 async def get_last_predictions(
